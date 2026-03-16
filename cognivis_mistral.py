@@ -14,17 +14,20 @@ class DataCleaner:
 
     def standardize(self):
         df = self.raw_df.copy()
+        # Clean headers: lowercase and remove extra spaces
         df.columns = df.columns.str.lower().str.strip()
         
         mapping = {
             'Invoice_ID': ['invoice number', 'receipt no', 'id', 'invoice', 'receipt'],
             'Amount': ['price', 'total', 'amount', 'grand total', 'net total'],
             'Buyer_VAT': ['vat number', 'customer vat', 'tax id', 'buyer_vat', 'customer_tax'],
-            'Product': ['product name', 'item', 'description', 'product']
+            'Product': ['product name', 'item', 'description', 'product', 'item description']
         }
 
         for target, keywords in mapping.items():
-            found_col = next((col for col in keywords if col in df.columns), None)
+            # Match any of our keywords to the actual column names
+            found_col = next((col for col in df.columns if col in keywords), None)
+            
             if found_col:
                 if target == 'Amount':
                     self.clean_df[target] = df[found_col].astype(str).str.replace(r'[^\d.]', '', regex=True)
@@ -32,7 +35,7 @@ class DataCleaner:
                 else:
                     self.clean_df[target] = df[found_col]
             else:
-                self.clean_df[target] = "" if target != 'Amount' else 0.0
+                self.clean_df[target] = "Unknown" if target != 'Amount' else 0.0
         return self.clean_df
 
 # --- 3. ZATCA SHIELD LOGIC ---
