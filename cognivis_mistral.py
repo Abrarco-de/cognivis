@@ -2,6 +2,12 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from mistralai import Mistral
+# Updated Import Logic
+try:
+    from mistralai import Mistral
+except ImportError:
+    from mistralai.client import MistralClient as Mistral 
+    # This acts as a backup if your environment is using an older SDK version
 
 # --- PAGE SETUP ---
 st.set_page_config(page_title="Cognivis OS | Mistral Brain", layout="wide", page_icon="🧠")
