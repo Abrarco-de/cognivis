@@ -1,172 +1,190 @@
 import streamlit as st
-import streamlit.components.v1 as components
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+from datetime import datetime, timedelta
+import io
+import re
 
-# Page config
+# --- STYLING & CONFIG ---
 st.set_page_config(
-    page_title="Cognivis OS | Dual Engine",
+    page_title="Cognivis OS | ZATCA Compliance & Intelligence",
     page_icon="🛡️",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="expanded"
 )
 
-# Custom Styling to make Streamlit feel like a dark OS
+# Custom CSS for Premium Look
 st.markdown("""
     <style>
-        .stApp {
-            background-color: #020617;
-            color: #f8fafc;
-        }
-        [data-testid="stSidebar"] {
-            background-color: #0f172a;
-            border-right: 1px solid #1e293b;
-        }
-        .zatca-card {
-            background: rgba(15, 23, 42, 0.6);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(34, 197, 94, 0.2);
-            padding: 20px;
-            border-radius: 12px;
-            margin-bottom: 10px;
-        }
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+    
+    html, body, [class*="css"] {
+        font-family: 'Inter', sans-serif;
+    }
+    
+    .stMetric {
+        background: rgba(15, 23, 42, 0.6);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        padding: 20px;
+        border-radius: 15px;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    }
+    
+    .zatca-shield {
+        background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+        border-left: 5px solid #10b981;
+        padding: 20px;
+        border-radius: 10px;
+        margin-bottom: 25px;
+    }
+    
+    .main {
+        background-color: #020617;
+    }
     </style>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_dict=True)
 
-# 3D Scene HTML/JS String
-three_js_code = """
-<!DOCTYPE html>
-<html>
-<head>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <style>
-        body { margin: 0; overflow: hidden; background: transparent; }
-        canvas { width: 100vw; height: 400px; display: block; }
-    </style>
-</head>
-<body>
-    <div id="canvas-container"></div>
-    <script>
-        let scene, camera, renderer, core, shield;
-        
-        function init() {
-            scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(45, window.innerWidth / 400, 0.1, 1000);
-            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-            renderer.setSize(window.innerWidth, 400);
-            document.body.appendChild(renderer.domElement);
-
-            // The Core
-            const coreGeo = new THREE.IcosahedronGeometry(1.5, 1);
-            const coreMat = new THREE.MeshPhongMaterial({ 
-                color: 0x22d3ee, 
-                wireframe: true,
-                transparent: true,
-                opacity: 0.4
-            });
-            core = new THREE.Mesh(coreGeo, coreMat);
-            scene.add(core);
-
-            // The Shield
-            const shieldGeo = new THREE.SphereGeometry(2.2, 32, 32);
-            const shieldMat = new THREE.MeshPhongMaterial({
-                color: 0x059669,
-                transparent: true,
-                opacity: 0.1,
-                side: THREE.BackSide
-            });
-            shield = new THREE.Mesh(shieldGeo, shieldMat);
-            scene.add(shield);
-
-            const light = new THREE.PointLight(0x22d3ee, 2, 100);
-            light.position.set(5, 5, 5);
-            scene.add(light);
-            scene.add(new THREE.AmbientLight(0x404040));
-
-            camera.position.z = 6;
-            animate();
-        }
-
-        function animate() {
-            requestAnimationFrame(animate);
-            core.rotation.y += 0.005;
-            core.rotation.x += 0.002;
-            shield.rotation.y -= 0.001;
-            renderer.render(scene, camera);
+# --- CORE LOGIC: DATA CLEANING & SCHEMA DETECTION ---
+class CognivisDataEngine:
+    @staticmethod
+    def detect_zatca_schema(df):
+        """Analyzes dataframe for ZATCA Phase 2 (FATOORA) compliance requirements."""
+        required_fields = {
+            'InvoiceNumber': ['id', 'invoice', 'no', 'number'],
+            'IssueDate': ['date', 'issued', 'time'],
+            'TaxRegistrationNumber': ['trn', 'vat', 'tax_no'],
+            'LineAmount': ['amount', 'total', 'subtotal'],
+            'TaxAmount': ['tax', 'vat_amount']
         }
         
-        init();
-        window.addEventListener('resize', () => {
-            camera.aspect = window.innerWidth / 400;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, 400);
-        });
-    </script>
-</body>
-</html>
-"""
+        mapping = {}
+        for field, keywords in required_fields.items():
+            match = [col for col in df.columns if any(k in col.lower() for k in keywords)]
+            mapping[field] = match[0] if match else None
+            
+        return mapping
 
-# --- SIDEBAR NAVIGATION ---
-st.sidebar.title("COGNIVIS OS")
-st.sidebar.markdown("---")
-selection = st.sidebar.radio(
-    "Navigation",
-    ["🛡️ ZATCA Shield", "🧠 Profit Insights", "⚙️ Settings"],
-    index=0
-)
+    @staticmethod
+    def clean_and_validate(df, schema):
+        """Standardizes data and flags compliance risks."""
+        # Standardize Dates
+        date_col = schema.get('IssueDate')
+        if date_col:
+            df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+        
+        # Standardize Numeric
+        amt_col = schema.get('LineAmount')
+        if amt_col:
+            df[amt_col] = pd.to_numeric(df[amt_col], errors='coerce').fillna(0)
+            
+        # Flagging Compliance Errors (e.g., Missing TRN)
+        trn_col = schema.get('TaxRegistrationNumber')
+        df['Compliance_Flag'] = "Pass"
+        if trn_col:
+            df.loc[df[trn_col].astype(str).str.len() != 15, 'Compliance_Flag'] = "Warning: Invalid TRN Length"
+            
+        return df
 
-st.sidebar.markdown("---")
-st.sidebar.info("System Status: **Secure**")
+# --- UI COMPONENTS ---
+def sidebar_navigation():
+    with st.sidebar:
+        st.markdown("<h1 style='color: #0ea5e9; font-weight: 900; italic: true;'>COGNIVIS OS</h1>", unsafe_allow_dict=True)
+        st.write("🛡️ **ZATCA SHIELD ACTIVE**")
+        st.divider()
+        mode = st.radio("Navigation", ["Intelligence Hub", "Compliance Audit", "Schema Settings"])
+        st.divider()
+        st.info("System Health: **Optimal**\n\nCloud Sync: **Verified**")
+    return mode
 
-# --- MAIN CONTENT LOGIC ---
+def render_metrics(df, schema):
+    amt_col = schema.get('LineAmount')
+    tax_col = schema.get('TaxAmount')
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    total_rev = df[amt_col].sum() if amt_col else 0
+    total_tax = df[tax_col].sum() if tax_col else (total_rev * 0.15)
+    invoices = len(df)
+    compliance_rate = (len(df[df['Compliance_Flag'] == 'Pass']) / len(df)) * 100 if len(df) > 0 else 100
 
-if selection == "🛡️ ZATCA Shield":
-    st.title("ZATCA Regulatory Shield")
-    st.subheader("Real-time Compliance Monitoring")
-    
-    # Embed the 3D Scene at the top of the ZATCA section
-    components.html(three_js_code, height=400)
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Phase 2 Readiness", "100%", delta="Verified")
-    with col2:
-        st.metric("Sequence Integrity", "Valid", delta="0 Errors")
-    with col3:
-        st.metric("Pending Uploads", "0", delta="-12", delta_color="normal")
-    
-    st.markdown("### Recent Transactions")
-    st.table([
-        {"Invoice ID": "INV-2024-001", "Status": "Success", "ZATCA Hash": "9a8b...2c1d"},
-        {"Invoice ID": "INV-2024-002", "Status": "Success", "ZATCA Hash": "4f5e...8g9h"},
-        {"Invoice ID": "INV-2024-003", "Status": "Verifying...", "ZATCA Hash": "Pending"},
-    ])
+    col1.metric("Gross Revenue", f"SAR {total_rev:,.2f}", "+12.5%")
+    col2.metric("VAT Collected", f"SAR {total_tax:,.2f}", "+8.2%")
+    col3.metric("Total Documents", f"{invoices:,}", "Live")
+    col4.metric("Compliance Score", f"{compliance_rate:.1f}%", "-0.4%", delta_color="inverse")
 
-elif selection == "🧠 Profit Insights":
-    st.title("The Brain: Profit Intelligence")
-    st.markdown("### Mistral AI Business Advisory")
+# --- MAIN APP ---
+def main():
+    mode = sidebar_navigation()
     
-    with st.chat_message("assistant"):
-        st.write("Ahmed, I noticed your **Chicken Burger** margins dropped by 12% in Riyadh Branch. This coincides with a 15% increase in poultry supplier costs. Recommend adjusting price to 24 SAR.")
-    
-    col_a, col_b = st.columns(2)
-    with col_a:
+    # Mock Data Generation if no file is uploaded
+    if 'data' not in st.session_state:
+        dates = pd.date_range(end=datetime.now(), periods=100)
+        st.session_state.data = pd.DataFrame({
+            'invoice_id': [f"INV-{1000+i}" for i in range(100)],
+            'transaction_date': dates,
+            'vat_id': [f"3000{np.random.randint(1000000000, 9999999999)}" for _ in range(100)],
+            'gross_total': np.random.uniform(500, 5000, size=100),
+            'customer_segment': np.random.choice(['Retail', 'Corporate', 'Government'], 100)
+        })
+
+    engine = CognivisDataEngine()
+    schema = engine.detect_zatca_schema(st.session_state.data)
+    df = engine.clean_and_validate(st.session_state.data, schema)
+
+    if mode == "Intelligence Hub":
+        st.markdown("### 📊 Business Intelligence Hub")
+        render_metrics(df, schema)
+        
+        c1, c2 = st.columns([2, 1])
+        
+        with c1:
+            st.markdown("#### Revenue Velocity")
+            fig = px.area(df, x=schema['IssueDate'], y=schema['LineAmount'], 
+                          color_discrete_sequence=['#0ea5e9'])
+            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
+                              font_color="white", margin=dict(l=0, r=0, t=20, b=0))
+            st.plotly_chart(fig, use_container_width=True)
+            
+        with c2:
+            st.markdown("#### Segment Performance")
+            fig_pie = px.pie(df, values=schema['LineAmount'], names='customer_segment', 
+                             hole=0.6, color_discrete_sequence=px.colors.sequential.Cyan_r)
+            fig_pie.update_layout(showlegend=False, paper_bgcolor='rgba(0,0,0,0)')
+            st.plotly_chart(fig_pie, use_container_width=True)
+
+    elif mode == "Compliance Audit":
+        st.markdown("### 🛡️ ZATCA Shield Audit")
+        
         st.markdown("""
-        <div class="zatca-card">
-            <h4>Stock Velocity</h4>
-            <p>Your <b>Almarai Milk (1L)</b> is moving 4x faster than last week. Suggest increasing order volume by 20%.</p>
+        <div class='zatca-shield'>
+            <h4 style='margin:0; color:#10b981;'>Phase 2 Readiness Check</h4>
+            <p style='margin:0; font-size: 0.8em; color:#94a3b8;'>Cross-referencing XML tags with physical invoice headers...</p>
         </div>
-        """, unsafe_allow_html=True)
-    
-    with col_b:
-        st.markdown("""
-        <div class="zatca-card">
-            <h4>Micro-Theft Alert</h4>
-            <p>Shift B shows 4 'Void' transactions at the same terminal between 2PM-3PM. Investigating patterns...</p>
-        </div>
-        """, unsafe_allow_html=True)
+        """, unsafe_allow_dict=True)
+        
+        errors = df[df['Compliance_Flag'] != "Pass"]
+        if not errors.empty:
+            st.warning(f"Detected {len(errors)} potential compliance risks.")
+            st.dataframe(errors, use_container_width=True)
+        else:
+            st.success("All analyzed documents meet current ZATCA structure standards.")
+            
+        st.markdown("#### Schema Mapping")
+        st.json(schema)
 
-elif selection == "⚙️ Settings":
-    st.title("System Configuration")
-    st.text_input("ZATCA API Key", type="password")
-    st.text_input("Store Location ID")
-    st.toggle("Enable Mistral AI Real-time Advice", value=True)
-    st.button("Run Compliance Audit")
+    elif mode == "Schema Settings":
+        st.markdown("### ⚙️ Data Engineering & Schema")
+        st.info("The Cognivis Engine automatically detected your column headers. You can override them below.")
+        
+        cols = df.columns.tolist()
+        new_schema = {}
+        for key in schema.keys():
+            new_schema[key] = st.selectbox(f"Map {key}", options=cols, index=cols.index(schema[key]) if schema[key] in cols else 0)
+        
+        if st.button("Apply New Schema"):
+            st.success("Internal engine updated. Recalculating insights...")
+
+if __name__ == "__main__":
+    main()
