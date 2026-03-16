@@ -64,7 +64,15 @@ def run_zatca_audit(df):
 
 # --- 4. MISTRAL INTELLIGENCE LAYER ---
 def get_mistral_insights(fact_sheet, api_key):
-    if not api_key: return "Please enter API Key."
+    # Instead of: api_key = st.sidebar.text_input(...)
+# Use this:
+try:
+    api_key = st.secrets["MISTRAL_API_KEY"]
+except:
+    api_key = st.sidebar.text_input("Enter Mistral Key (Secret not found)", type="password")
+
+# Then pass it to the Brain
+insight = get_mistral_insights(facts, api_key)
     
     try:
         client = Mistral(api_key=api_key)
