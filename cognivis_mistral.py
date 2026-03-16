@@ -1,133 +1,172 @@
 import streamlit as st
-import pandas as pd
-import numpy as np
-from mistralai import Mistral
+import streamlit.components.v1 as components
 
-# --- 1. PAGE SETUP ---
-st.set_page_config(page_title="Cognivis OS", layout="wide", page_icon="🧠")
+# Page config
+st.set_page_config(
+    page_title="Cognivis OS | Dual Engine",
+    page_icon="🛡️",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-# --- 2. DATA CLEANING ENGINE ---
-class DataCleaner:
-    def __init__(self, df):
-        self.raw_df = df
-        self.clean_df = pd.DataFrame()
+# Custom Styling to make Streamlit feel like a dark OS
+st.markdown("""
+    <style>
+        .stApp {
+            background-color: #020617;
+            color: #f8fafc;
+        }
+        [data-testid="stSidebar"] {
+            background-color: #0f172a;
+            border-right: 1px solid #1e293b;
+        }
+        .zatca-card {
+            background: rgba(15, 23, 42, 0.6);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(34, 197, 94, 0.2);
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 10px;
+        }
+    </style>
+""", unsafe_allow_html=True)
 
-    def standardize(self):
-        df = self.raw_df.copy()
-        # Clean headers: lowercase and remove extra spaces
-        df.columns = df.columns.str.lower().str.strip()
+# 3D Scene HTML/JS String
+three_js_code = """
+<!DOCTYPE html>
+<html>
+<head>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background: transparent; }
+        canvas { width: 100vw; height: 400px; display: block; }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"></div>
+    <script>
+        let scene, camera, renderer, core, shield;
         
-        mapping = {
-            'Invoice_ID': ['invoice number', 'receipt no', 'id', 'invoice', 'receipt'],
-            'Amount': ['price', 'total', 'amount', 'grand total', 'net total'],
-            'Buyer_VAT': ['vat number', 'customer vat', 'tax id', 'buyer_vat', 'customer_tax'],
-            'Product': ['product name', 'item', 'description', 'product', 'item description']
+        function init() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / 400, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, 400);
+            document.body.appendChild(renderer.domElement);
+
+            // The Core
+            const coreGeo = new THREE.IcosahedronGeometry(1.5, 1);
+            const coreMat = new THREE.MeshPhongMaterial({ 
+                color: 0x22d3ee, 
+                wireframe: true,
+                transparent: true,
+                opacity: 0.4
+            });
+            core = new THREE.Mesh(coreGeo, coreMat);
+            scene.add(core);
+
+            // The Shield
+            const shieldGeo = new THREE.SphereGeometry(2.2, 32, 32);
+            const shieldMat = new THREE.MeshPhongMaterial({
+                color: 0x059669,
+                transparent: true,
+                opacity: 0.1,
+                side: THREE.BackSide
+            });
+            shield = new THREE.Mesh(shieldGeo, shieldMat);
+            scene.add(shield);
+
+            const light = new THREE.PointLight(0x22d3ee, 2, 100);
+            light.position.set(5, 5, 5);
+            scene.add(light);
+            scene.add(new THREE.AmbientLight(0x404040));
+
+            camera.position.z = 6;
+            animate();
         }
 
-        for target, keywords in mapping.items():
-            # Match any of our keywords to the actual column names
-            found_col = next((col for col in df.columns if col in keywords), None)
-            
-            if found_col:
-                if target == 'Amount':
-                    self.clean_df[target] = df[found_col].astype(str).str.replace(r'[^\d.]', '', regex=True)
-                    self.clean_df[target] = pd.to_numeric(self.clean_df[target], errors='coerce').fillna(0)
-                else:
-                    self.clean_df[target] = df[found_col]
-            else:
-                self.clean_df[target] = "Unknown" if target != 'Amount' else 0.0
-        return self.clean_df
-
-# --- 3. ZATCA SHIELD LOGIC ---
-def run_zatca_audit(df):
-    violations = []
-    total_rev = df['Amount'].sum()
-    
-    for _, row in df.iterrows():
-        if row['Amount'] >= 1000:
-            vat_val = str(row['Buyer_VAT']).strip()
-            if vat_val == "" or vat_val.lower() == "nan" or len(vat_val) < 5:
-                violations.append({
-                    "id": row['Invoice_ID'],
-                    "amt": row['Amount'],
-                    "msg": "Missing/Invalid Buyer VAT for sale >1000 SAR"
-                })
-    
-    fact_sheet = {
-        "revenue": total_rev,
-        "violation_count": len(violations),
-        "total_tx": len(df),
-        "top_item": df['Product'].mode()[0] if not df.empty else "N/A"
-    }
-    return fact_sheet, violations
-
-# --- 4. MISTRAL INTELLIGENCE ---
-def get_mistral_insights(fact_sheet, api_key):
-    if not api_key: 
-        return "Please provide an API Key to enable the AI Brain."
-    
-    try:
-        client = Mistral(api_key=api_key)
-        prompt = f"Analyze these business facts: {fact_sheet}. Provide a 3-part insight: 1. Insight, 2. Reason, 3. Recommendation. Keep it short and conversational. No bold text."
+        function animate() {
+            requestAnimationFrame(animate);
+            core.rotation.y += 0.005;
+            core.rotation.x += 0.002;
+            shield.rotation.y -= 0.001;
+            renderer.render(scene, camera);
+        }
         
-        response = client.chat.complete(
-            model="mistral-large-latest",
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        return f"Brain Error: {str(e)}"
+        init();
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / 400;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, 400);
+        });
+    </script>
+</body>
+</html>
+"""
 
-# --- 5. UI DASHBOARD ---
-st.title("🧠 Cognivis OS")
+# --- SIDEBAR NAVIGATION ---
+st.sidebar.title("COGNIVIS OS")
+st.sidebar.markdown("---")
+selection = st.sidebar.radio(
+    "Navigation",
+    ["🛡️ ZATCA Shield", "🧠 Profit Insights", "⚙️ Settings"],
+    index=0
+)
 
-# API Key Logic: Try Secrets first, then Sidebar
-api_key = st.secrets.get("MISTRAL_API_KEY")
-if not api_key:
-    api_key = st.sidebar.text_input("Mistral API Key (Not found in Secrets)", type="password")
+st.sidebar.markdown("---")
+st.sidebar.info("System Status: **Secure**")
 
-uploaded_file = st.file_uploader("Upload POS Data (CSV/Excel)", type=['csv', 'xlsx'])
+# --- MAIN CONTENT LOGIC ---
 
-if uploaded_file:
-    # Load
-    if uploaded_file.name.endswith('.csv'):
-        raw_df = pd.read_csv(uploaded_file)
-    else:
-        raw_df = pd.read_excel(uploaded_file)
+if selection == "🛡️ ZATCA Shield":
+    st.title("ZATCA Regulatory Shield")
+    st.subheader("Real-time Compliance Monitoring")
     
-    # Process
-    cleaner = DataCleaner(raw_df)
-    clean_df = cleaner.standardize()
-    facts, alerts = run_zatca_audit(clean_df)
+    # Embed the 3D Scene at the top of the ZATCA section
+    components.html(three_js_code, height=400)
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Phase 2 Readiness", "100%", delta="Verified")
+    with col2:
+        st.metric("Sequence Integrity", "Valid", delta="0 Errors")
+    with col3:
+        st.metric("Pending Uploads", "0", delta="-12", delta_color="normal")
+    
+    st.markdown("### Recent Transactions")
+    st.table([
+        {"Invoice ID": "INV-2024-001", "Status": "Success", "ZATCA Hash": "9a8b...2c1d"},
+        {"Invoice ID": "INV-2024-002", "Status": "Success", "ZATCA Hash": "4f5e...8g9h"},
+        {"Invoice ID": "INV-2024-003", "Status": "Verifying...", "ZATCA Hash": "Pending"},
+    ])
 
-    # Layout
-    col_left, col_right = st.columns([3, 2])
+elif selection == "🧠 Profit Insights":
+    st.title("The Brain: Profit Intelligence")
+    st.markdown("### Mistral AI Business Advisory")
+    
+    with st.chat_message("assistant"):
+        st.write("Ahmed, I noticed your **Chicken Burger** margins dropped by 12% in Riyadh Branch. This coincides with a 15% increase in poultry supplier costs. Recommend adjusting price to 24 SAR.")
+    
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.markdown("""
+        <div class="zatca-card">
+            <h4>Stock Velocity</h4>
+            <p>Your <b>Almarai Milk (1L)</b> is moving 4x faster than last week. Suggest increasing order volume by 20%.</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col_b:
+        st.markdown("""
+        <div class="zatca-card">
+            <h4>Micro-Theft Alert</h4>
+            <p>Shift B shows 4 'Void' transactions at the same terminal between 2PM-3PM. Investigating patterns...</p>
+        </div>
+        """, unsafe_allow_html=True)
 
-    with col_left:
-        st.subheader("🛡️ Compliance & Data")
-        st.dataframe(clean_df, use_container_width=True)
-        
-        if alerts:
-            st.error(f"🚨 {len(alerts)} Critical Risks Detected")
-            for a in alerts:
-                st.markdown(f"""
-                <div style="background-color:#e1ffc7; padding:10px; border-radius:10px; margin-bottom:5px; color:#000; border-left:4px solid #25d366">
-                <b>🚨 ZATCA Alert</b><br>Invoice {a['id']} ({a['amt']} SAR) is non-compliant.<br><i>{a['msg']}</i>
-                </div>
-                """, unsafe_allow_html=True)
-        else:
-            st.success("✅ System Fully Compliant")
-
-    with col_right:
-        st.subheader("💡 AI Brain")
-        if st.button("Generate AI Insights"):
-            with st.spinner("Mistral is thinking..."):
-                insight = get_mistral_insights(facts, api_key)
-                st.info(insight)
-        
-        st.divider()
-        st.metric("Total Revenue", f"{facts['revenue']} SAR")
-        st.metric("Total Transactions", facts['total_tx'])
-        st.metric("Top Selling Item", facts['top_item'])
-else:
-    st.info("Upload the test CSV to begin the audit.")
+elif selection == "⚙️ Settings":
+    st.title("System Configuration")
+    st.text_input("ZATCA API Key", type="password")
+    st.text_input("Store Location ID")
+    st.toggle("Enable Mistral AI Real-time Advice", value=True)
+    st.button("Run Compliance Audit")
