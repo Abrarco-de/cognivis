@@ -1,190 +1,80 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime, timedelta
-import io
-import re
+from mistralai import Mistral
 
-# --- STYLING & CONFIG ---
-st.set_page_config(
-    page_title="Cognivis OS | ZATCA Compliance & Intelligence",
-    page_icon="🛡️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# --- MISTRAL CONFIG ---
+MISTRAL_API_KEY = "YOUR_MISTRAL_KEY"
 
-# Custom CSS for Premium Look
+# --- UI STYLING ---
+st.set_page_config(page_title="Cognivis OS", layout="wide")
 st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
-    
-    html, body, [class*="css"] {
-        font-family: 'Inter', sans-serif;
-    }
-    
-    .stMetric {
-        background: rgba(15, 23, 42, 0.6);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        padding: 20px;
-        border-radius: 15px;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-    }
-    
-    .zatca-shield {
-        background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-        border-left: 5px solid #10b981;
-        padding: 20px;
-        border-radius: 10px;
-        margin-bottom: 25px;
-    }
-    
-    .main {
-        background-color: #020617;
-    }
+    .zatca-card { background-color: #00FF0015; border: 1px solid #00FF00; padding: 20px; border-radius: 10px; }
+    .ai-card { background-color: #00FFFF15; border: 1px solid #00FFFF; padding: 20px; border-radius: 10px; }
+    .stMetric { color: #ffffff !important; }
     </style>
-    """, unsafe_allow_dict=True)
+    """, unsafe_allow_html=True)
 
-# --- CORE LOGIC: DATA CLEANING & SCHEMA DETECTION ---
-class CognivisDataEngine:
-    @staticmethod
-    def detect_zatca_schema(df):
-        """Analyzes dataframe for ZATCA Phase 2 (FATOORA) compliance requirements."""
-        required_fields = {
-            'InvoiceNumber': ['id', 'invoice', 'no', 'number'],
-            'IssueDate': ['date', 'issued', 'time'],
-            'TaxRegistrationNumber': ['trn', 'vat', 'tax_no'],
-            'LineAmount': ['amount', 'total', 'subtotal'],
-            'TaxAmount': ['tax', 'vat_amount']
-        }
+# --- LAYER 1: UNIVERSAL CLEANER ---
+class DataCleaner:
+    def __init__(self, df):
+        self.df = df
+        self.clean_df = pd.DataFrame()
+
+    def auto_process(self):
+        cols = {c.lower().replace(' ', '_'): c for c in self.df.columns}
+        # Fuzzy mapping
+        self.clean_df['ID'] = self.df[cols.get('invoice_number', self.df.columns[0])]
         
-        mapping = {}
-        for field, keywords in required_fields.items():
-            match = [col for col in df.columns if any(k in col.lower() for k in keywords)]
-            mapping[field] = match[0] if match else None
-            
-        return mapping
-
-    @staticmethod
-    def clean_and_validate(df, schema):
-        """Standardizes data and flags compliance risks."""
-        # Standardize Dates
-        date_col = schema.get('IssueDate')
-        if date_col:
-            df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+        amt_key = next((k for k in ['total', 'amount', 'price', 'grand_total'] if k in cols), self.df.columns[1])
+        self.clean_df['Amount'] = pd.to_numeric(self.df[cols[amt_key]].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce').fillna(0)
         
-        # Standardize Numeric
-        amt_col = schema.get('LineAmount')
-        if amt_col:
-            df[amt_col] = pd.to_numeric(df[amt_col], errors='coerce').fillna(0)
-            
-        # Flagging Compliance Errors (e.g., Missing TRN)
-        trn_col = schema.get('TaxRegistrationNumber')
-        df['Compliance_Flag'] = "Pass"
-        if trn_col:
-            df.loc[df[trn_col].astype(str).str.len() != 15, 'Compliance_Flag'] = "Warning: Invalid TRN Length"
-            
-        return df
-
-# --- UI COMPONENTS ---
-def sidebar_navigation():
-    with st.sidebar:
-        st.markdown("<h1 style='color: #0ea5e9; font-weight: 900; italic: true;'>COGNIVIS OS</h1>", unsafe_allow_dict=True)
-        st.write("🛡️ **ZATCA SHIELD ACTIVE**")
-        st.divider()
-        mode = st.radio("Navigation", ["Intelligence Hub", "Compliance Audit", "Schema Settings"])
-        st.divider()
-        st.info("System Health: **Optimal**\n\nCloud Sync: **Verified**")
-    return mode
-
-def render_metrics(df, schema):
-    amt_col = schema.get('LineAmount')
-    tax_col = schema.get('TaxAmount')
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
-    total_rev = df[amt_col].sum() if amt_col else 0
-    total_tax = df[tax_col].sum() if tax_col else (total_rev * 0.15)
-    invoices = len(df)
-    compliance_rate = (len(df[df['Compliance_Flag'] == 'Pass']) / len(df)) * 100 if len(df) > 0 else 100
-
-    col1.metric("Gross Revenue", f"SAR {total_rev:,.2f}", "+12.5%")
-    col2.metric("VAT Collected", f"SAR {total_tax:,.2f}", "+8.2%")
-    col3.metric("Total Documents", f"{invoices:,}", "Live")
-    col4.metric("Compliance Score", f"{compliance_rate:.1f}%", "-0.4%", delta_color="inverse")
-
-# --- MAIN APP ---
-def main():
-    mode = sidebar_navigation()
-    
-    # Mock Data Generation if no file is uploaded
-    if 'data' not in st.session_state:
-        dates = pd.date_range(end=datetime.now(), periods=100)
-        st.session_state.data = pd.DataFrame({
-            'invoice_id': [f"INV-{1000+i}" for i in range(100)],
-            'transaction_date': dates,
-            'vat_id': [f"3000{np.random.randint(1000000000, 9999999999)}" for _ in range(100)],
-            'gross_total': np.random.uniform(500, 5000, size=100),
-            'customer_segment': np.random.choice(['Retail', 'Corporate', 'Government'], 100)
-        })
-
-    engine = CognivisDataEngine()
-    schema = engine.detect_zatca_schema(st.session_state.data)
-    df = engine.clean_and_validate(st.session_state.data, schema)
-
-    if mode == "Intelligence Hub":
-        st.markdown("### 📊 Business Intelligence Hub")
-        render_metrics(df, schema)
+        vat_key = next((k for k in ['vat_number', 'tax_id', 'customer_vat'] if k in cols), None)
+        self.clean_df['VAT_ID'] = self.df[cols[vat_key]].astype(str) if vat_key else ""
         
-        c1, c2 = st.columns([2, 1])
-        
-        with c1:
-            st.markdown("#### Revenue Velocity")
-            fig = px.area(df, x=schema['IssueDate'], y=schema['LineAmount'], 
-                          color_discrete_sequence=['#0ea5e9'])
-            fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
-                              font_color="white", margin=dict(l=0, r=0, t=20, b=0))
-            st.plotly_chart(fig, use_container_width=True)
-            
-        with c2:
-            st.markdown("#### Segment Performance")
-            fig_pie = px.pie(df, values=schema['LineAmount'], names='customer_segment', 
-                             hole=0.6, color_discrete_sequence=px.colors.sequential.Cyan_r)
-            fig_pie.update_layout(showlegend=False, paper_bgcolor='rgba(0,0,0,0)')
-            st.plotly_chart(fig_pie, use_container_width=True)
+        return self.clean_df
 
-    elif mode == "Compliance Audit":
-        st.markdown("### 🛡️ ZATCA Shield Audit")
+# --- SIDEBAR NAVIGATION ---
+st.sidebar.title("🧠 Cognivis Brain")
+page = st.sidebar.radio("Go to:", ["📥 Data Upload", "🛡️ ZATCA Compliance", "💡 AI Human Insights"])
+st.sidebar.divider()
+
+if 'df' not in st.session_state:
+    st.session_state.df = None
+
+# --- PAGE 1: UPLOAD ---
+if page == "📥 Data Upload":
+    st.header("Step 1: Universal Data Ingestion")
+    file = st.file_uploader("Upload POS CSV", type=['csv'])
+    if file:
+        raw = pd.read_csv(file)
+        cleaner = DataCleaner(raw)
+        st.session_state.df = cleaner.auto_process()
+        st.success("Data Cleaned & Standardized.")
+        st.dataframe(st.session_state.df)
+
+# --- PAGE 2: ZATCA COMPLIANCE ---
+elif page == "🛡️ ZATCA Compliance":
+    st.header("Step 2: The ZATCA Shield")
+    if st.session_state.df is not None:
+        df = st.session_state.df
+        violations = df[ (df['Amount'] >= 1000) & (df['VAT_ID'].str.len() < 5) ]
         
-        st.markdown("""
-        <div class='zatca-shield'>
-            <h4 style='margin:0; color:#10b981;'>Phase 2 Readiness Check</h4>
-            <p style='margin:0; font-size: 0.8em; color:#94a3b8;'>Cross-referencing XML tags with physical invoice headers...</p>
-        </div>
-        """, unsafe_allow_dict=True)
+        # Safety Score Logic
+        score = 100 - (len(violations) * 10)
+        st.metric("Compliance Safety Score", f"{max(score, 0)}%", delta="-8%" if len(violations) > 0 else "Optimal")
         
-        errors = df[df['Compliance_Flag'] != "Pass"]
-        if not errors.empty:
-            st.warning(f"Detected {len(errors)} potential compliance risks.")
-            st.dataframe(errors, use_container_width=True)
+        if not violations.empty:
+            for _, row in violations.iterrows():
+                st.markdown(f"""<div class='zatca-card'>🚨 <b>Violation:</b> Invoice {row['ID']} exceeds 1,000 SAR but lacks a Buyer VAT ID.</div>""", unsafe_allow_html=True)
         else:
-            st.success("All analyzed documents meet current ZATCA structure standards.")
-            
-        st.markdown("#### Schema Mapping")
-        st.json(schema)
+            st.success("No ZATCA risks found.")
 
-    elif mode == "Schema Settings":
-        st.markdown("### ⚙️ Data Engineering & Schema")
-        st.info("The Cognivis Engine automatically detected your column headers. You can override them below.")
-        
-        cols = df.columns.tolist()
-        new_schema = {}
-        for key in schema.keys():
-            new_schema[key] = st.selectbox(f"Map {key}", options=cols, index=cols.index(schema[key]) if schema[key] in cols else 0)
-        
-        if st.button("Apply New Schema"):
-            st.success("Internal engine updated. Recalculating insights...")
-
-if __name__ == "__main__":
-    main()
+# --- PAGE 3: AI INSIGHTS ---
+elif page == "💡 AI Human Insights":
+    st.header("Step 3: Neon Intelligence")
+    if st.session_state.df is not None:
+        st.markdown("<div class='ai-card'>Scanning for business patterns...</div>", unsafe_allow_html=True)
+        if st.button("Generate Human-Style Insights"):
+            # Mocking the Mistral call for flow
+            st.info("Insight: Your top selling item is performing well, but your margin on high-value orders is at risk due to compliance gaps.")
