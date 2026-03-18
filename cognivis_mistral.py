@@ -22,26 +22,24 @@ if 'cleaned' not in st.session_state:
 
 # --- 3. THE CLEANING ENGINE ---
 def universal_cleaner(df):
-    # Standardize column names
+    # 1. Standardize to lowercase and underscores
     df.columns = [c.lower().replace(' ', '_').strip() for c in df.columns]
     
-    # Map common variations to our internal schema
+    # 2. Hard-Mapping (The Bridge)
+    # This maps whatever your POS outputs to what Cognivis needs
     mapping = {
-        'invoice': 'invoice_id', 'inv_id': 'invoice_id', 'receipt': 'invoice_id',
-        'amount': 'amount_sar', 'total': 'amount_sar', 'price': 'amount_sar',
-        'category': 'product_category', 'type': 'product_category',
-        'vat': 'customer_vat_id', 'tax_id': 'customer_vat_id'
+        'total': 'amount_sar', 'price': 'amount_sar', 'net_amount': 'amount_sar',
+        'vat_no': 'customer_vat_id', 'tax_id': 'customer_vat_id', 'vat_id': 'customer_vat_id',
+        'item': 'product_category', 'dept': 'product_category'
     }
     df = df.rename(columns=mapping)
-
-    # Clean numeric data
-    if 'amount_sar' in df.columns:
-        df['amount_sar'] = df['amount_sar'].astype(str).str.replace(r'[^\d.]', '', regex=True)
-        df['amount_sar'] = pd.to_numeric(df['amount_sar'], errors='coerce').fillna(0)
     
-    # Clean VAT IDs
-    if 'customer_vat_id' in df.columns:
-        df['customer_vat_id'] = df['customer_vat_id'].fillna('').astype(str).str.strip()
+    # 3. Validation: If the column STILL doesn't exist, create an empty one so code doesn't crash
+    if 'amount_sar' not in df.columns:
+        st.error("⚠️ Column 'Amount' not found. Please check your CSV headers.")
+        df['amount_sar'] = 0
+    if 'customer_vat_id' not in df.columns:
+        df['customer_vat_id'] = ""
         
     return df
 
