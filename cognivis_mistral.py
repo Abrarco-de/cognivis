@@ -1,3 +1,6 @@
+import streamlit as st
+
+st.write("✅ App is starting...")
 def titanium_cleaner(df):
     # --- 1. Standardize headers ---
     df.columns = [c.lower().replace(' ', '_').strip() for c in df.columns]
