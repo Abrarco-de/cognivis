@@ -1,127 +1,199 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+from mistralai import Mistral
 
-# --- 1. CONFIG & THEME ---
-st.set_page_config(page_title="Cognivis OS", layout="wide", page_icon="🧠")
+# --- 1. SETTINGS & THEMING ---
+st.set_page_config(page_title="Cognivis OS", page_icon="🧠", layout="wide")
 
+# Custom CSS for Strict Visual Separation
 st.markdown("""
     <style>
-    .reportview-container { background: #0e1117; }
-    .zatca-box { border: 2px solid #00FF00; padding: 15px; border-radius: 10px; background: #00FF0010; color: #00FF00; margin-bottom: 10px; }
-    .brain-box { border: 2px solid #00FFFF; padding: 15px; border-radius: 10px; background: #00FFFF10; color: #00FFFF; }
-    .stMetric { background-color: #1e2130; padding: 10px; border-radius: 5px; }
+    .stApp { background-color: #0e1117; color: #ffffff; }
+    [data-testid="stMetricValue"] { font-size: 1.8rem; }
+    
+    /* Shield Theme (Green) */
+    .shield-card {
+        border: 2px solid #00FF00;
+        background-color: rgba(0, 255, 0, 0.05);
+        padding: 20px;
+        border-radius: 12px;
+        margin-bottom: 15px;
+    }
+    
+    /* Brain Theme (Blue) */
+    .brain-card {
+        border: 2px solid #00FFFF;
+        background-color: rgba(0, 255, 255, 0.05);
+        padding: 20px;
+        border-radius: 12px;
+        margin-bottom: 15px;
+    }
+    
+    .whatsapp-box {
+        background-color: #075e54;
+        color: white;
+        padding: 15px;
+        border-radius: 10px;
+        font-family: 'Helvetica', sans-serif;
+        border-left: 5px solid #25d366;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. GLOBAL STATE MANAGEMENT ---
-if 'main_df' not in st.session_state:
-    st.session_state.main_df = None
-if 'cleaned' not in st.session_state:
-    st.session_state.cleaned = False
+# --- 2. SESSION STATE INITIALIZATION ---
+if 'data' not in st.session_state:
+    st.session_state.data = None
+if 'resolved_invoices' not in st.session_state:
+    st.session_state.resolved_invoices = set()
+if 'insights' not in st.session_state:
+    st.session_state.insights = None
 
-# --- 3. THE CLEANING ENGINE ---
-def universal_cleaner(df):
-    # 1. Standardize to lowercase and underscores
+MISTRAL_API_KEY = "YOUR_MISTRAL_API_KEY" # Replace with your key
+
+# --- 3. CORE LOGIC FUNCTIONS ---
+
+def get_mock_data():
+    return pd.DataFrame({
+        "invoice_id": ["INV-1021", "INV-1022", "INV-1023", "INV-1024", "INV-1025"],
+        "category": ["Catering", "Retail", "Catering", "Retail", "Catering"],
+        "amount_sar": [1250.00, 800.00, 1500.00, 450.00, 2100.00],
+        "customer_vat_id": ["", "123456789", "", "987654321", ""]
+    })
+
+def clean_data(df):
     df.columns = [c.lower().replace(' ', '_').strip() for c in df.columns]
-    
-    # 2. Hard-Mapping (The Bridge)
-    # This maps whatever your POS outputs to what Cognivis needs
     mapping = {
-        'total': 'amount_sar', 'price': 'amount_sar', 'net_amount': 'amount_sar',
-        'vat_no': 'customer_vat_id', 'tax_id': 'customer_vat_id', 'vat_id': 'customer_vat_id',
-        'item': 'product_category', 'dept': 'product_category'
+        'total': 'amount_sar', 'price': 'amount_sar', 'vat': 'customer_vat_id',
+        'id': 'invoice_id', 'dept': 'category'
     }
     df = df.rename(columns=mapping)
-    
-    # 3. Validation: If the column STILL doesn't exist, create an empty one so code doesn't crash
-    if 'amount_sar' not in df.columns:
-        st.error("⚠️ Column 'Amount' not found. Please check your CSV headers.")
-        df['amount_sar'] = 0
-    if 'customer_vat_id' not in df.columns:
-        df['customer_vat_id'] = ""
-        
+    if 'amount_sar' in df.columns:
+        df['amount_sar'] = pd.to_numeric(df['amount_sar'], errors='coerce').fillna(0)
     return df
 
-# --- 4. SIDEBAR ---
-st.sidebar.title("🧠 Cognivis OS")
-st.sidebar.caption("SME Compliance & Growth")
-menu = st.sidebar.radio("Navigation", ["📥 Data Hub", "🛡️ ZATCA Shield", "💡 AI Brain"])
-
-if st.session_state.main_df is not None:
-    st.sidebar.divider()
-    st.sidebar.metric("Data Health", "98.7%", "Cleaned")
-    st.sidebar.caption("✅ POS Sync: Active")
-
-# --- PAGE 1: DATA HUB ---
-if menu == "📥 Data Hub":
-    st.title("📥 Universal Data Hub")
-    st.caption("AI Shield + Brain for Saudi SMEs")
+# --- 4. SIDEBAR NAVIGATION ---
+with st.sidebar:
+    st.title("🧠 Cognivis OS")
+    st.caption("AI Shield + Brain for SME Growth")
+    st.divider()
     
-    file = st.file_uploader("Upload POS Export (CSV)", type=['csv'])
+    st.metric("System Confidence", "98.4%", "+0.2%")
+    st.write("● POS → Cognivis → ZATCA")
+    
+    page = st.sidebar.radio("Navigation", ["📥 Data Hub", "🛡️ ZATCA Shield", "💡 AI Brain"])
+    st.divider()
+    st.caption("v1.0.2 Production MVP")
+
+# --- 5. PAGE 1: DATA HUB ---
+if page == "📥 Data Hub":
+    st.title("📥 Data Ingestion Layer")
+    st.write("Standardizing multi-source POS data for compliance audit.")
+    
+    file = st.file_uploader("Upload POS CSV Export", type=['csv'])
     
     if file:
         raw_df = pd.read_csv(file)
-        with st.spinner("Standardizing Schema..."):
-            st.session_state.main_df = universal_cleaner(raw_df)
-            st.session_state.cleaned = True
-        st.success("✅ Data Synced and Standardized.")
-
-    if st.session_state.main_df is not None:
-        st.dataframe(st.session_state.main_df, use_container_width=True)
+        st.session_state.data = clean_data(raw_df)
+        st.success("✅ File Standardized Successfully")
     else:
-        st.info("Please upload a CSV file to begin the audit.")
-
-# --- PAGE 2: ZATCA SHIELD (Actionable) ---
-elif menu == "🛡️ ZATCA Shield":
-    st.header("🛡️ ZATCA Compliance Shield")
-    st.caption("🔄 POS → Cognivis Shield → ZATCA (Real-time Protection)")
-
-    if st.session_state.main_df is not None:
-        df = st.session_state.main_df
-        # Logic: Amount >= 1000 and VAT ID is missing
-        violations = df[(df['amount_sar'] >= 1000) & (df['customer_vat_id'] == "")]
+        st.session_state.data = get_mock_data()
+        st.info("💡 Running in Demo Mode with Mock Dataset")
         
-        if not violations.empty:
-            penalty_risk = len(violations) * 500
-            st.warning(f"🚨 Liability Detected: SAR {penalty_risk} in potential fines.")
-            
-            for i, row in violations.iterrows():
-                with st.expander(f"⚠️ Invoice {row['invoice_id']} - SAR {row['amount_sar']}"):
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        st.write("**Violation:** Missing Buyer VAT ID.")
-                        if st.button(f"Generate Credit Note", key=f"cn_{i}"):
-                            st.success("✅ Credit Note Drafted in POS.")
-                    with c2:
-                        st.write("📲 **WhatsApp Alert Simulation:**")
-                        st.code(f"Cognivis Alert: Inv {row['invoice_id']} is non-compliant. Risk: 500 SAR. Reply FIX.")
-        else:
-            st.success("✅ 100% Compliance Found.")
-    else:
-        st.error("Please upload data first.")
+    st.subheader("Data Preview")
+    st.dataframe(st.session_state.data, use_container_width=True)
 
-# --- PAGE 3: AI BRAIN (Advanced Insights) ---
-elif menu == "💡 AI Brain":
-    st.header("💡 Neon Intelligence Brain")
+# --- 6. PAGE 2: ZATCA SHIELD ---
+elif page == "🛡️ ZATCA Shield":
+    st.title("🛡️ ZATCA Compliance Shield")
+    st.caption("Preventing financial penalties through pre-submission validation.")
     
-    if st.session_state.main_df is not None:
-        df = st.session_state.main_df
-        
-        # FEATURE 1: DYNAMIC REVENUE
-        top_cat = df.groupby('product_category')['amount_sar'].sum().idxmax()
-        st.markdown(f"<div class='brain-box'><h3>📊 Top Performer</h3>Your <b>{top_cat}</b> category is driving revenue. Recommendation: Focus stock here.</div>", unsafe_allow_html=True)
-        
-        # FEATURE 2: SEQUENCE GAP (Forensic Audit)
-        st.subheader("🕵️ Forensic Audit: Sequence Gaps")
-        # Ensure invoice_id is sortable
-        df['num'] = pd.to_numeric(df['invoice_id'].astype(str).str.extract('(\d+)', expand=False), errors='coerce')
-        if not df['num'].isnull().all():
-            full_range = set(range(int(df['num'].min()), int(df['num'].max()) + 1))
-            missing = full_range - set(df['num'].dropna().unique())
-            if missing:
-                st.error(f"🚨 Missing Invoices: {len(missing)} gaps found (e.g., {list(missing)[:3]})")
-            else:
-                st.success("✅ No sequence gaps detected.")
+    df = st.session_state.data
+    # Logic: Amount >= 1000 and VAT ID empty
+    violations = df[(df['amount_sar'] >= 1000) & (df['customer_vat_id'].isin(["", None, np.nan]))]
+    # Filter out already resolved
+    active_violations = violations[~violations['invoice_id'].isin(st.session_state.resolved_invoices)]
+    
+    col_a, col_b = st.columns(2)
+    with col_a:
+        penalty = len(active_violations) * 500
+        st.metric("Potential Liability", f"SAR {penalty}", delta=f"-{len(st.session_state.resolved_invoices)*500} Resolved", delta_color="normal")
+    
+    with col_b:
+        risk_reduction = (len(st.session_state.resolved_invoices) / len(violations)) * 100 if len(violations) > 0 else 100
+        st.metric("Risk Reduction", f"{risk_reduction:.0f}%")
+
+    st.divider()
+    
+    if len(active_violations) > 0:
+        for _, row in active_violations.iterrows():
+            with st.container():
+                st.markdown(f"""<div class="shield-card">
+                    <b>🚨 VIOLATION: {row['invoice_id']}</b><br>
+                    High-value transaction (SAR {row['amount_sar']}) detected without valid Buyer VAT ID.
+                    </div>""", unsafe_allow_html=True)
+                
+                c1, c2 = st.columns([1, 2])
+                with c1:
+                    if st.button(f"Fix {row['invoice_id']}", key=row['invoice_id']):
+                        st.session_state.resolved_invoices.add(row['invoice_id'])
+                        st.toast(f"Generating Credit Note for {row['invoice_id']}...")
+                        st.rerun()
+                
+                with c2:
+                    st.markdown(f"""<div class="whatsapp-box">
+                        <b>[Cognivis Shield]</b><br>
+                        Invoice #{row['invoice_id']} is non-compliant.<br>
+                        Risk: SAR 500 fine.<br>
+                        <i>Reply 'FIX' to auto-resolve.</i>
+                        </div>""", unsafe_allow_html=True)
     else:
-        st.error("Please upload data first.")
+        st.success("🎉 All clear! 100% Compliance achieved for this batch.")
+
+# --- 7. PAGE 3: AI BRAIN ---
+elif page == "💡 AI Brain":
+    st.title("💡 AI Intelligence Brain")
+    st.caption("Transforming raw transactions into human-style growth strategies.")
+    
+    df = st.session_state.data
+    
+    # --- STEP 1: AGGREGATION ---
+    top_cat = df.groupby('category')['amount_sar'].sum().idxmax()
+    total_rev = df['amount_sar'].sum()
+    cat_rev = df[df['category'] == top_cat]['amount_sar'].sum()
+    rev_share = (cat_rev / total_rev) * 100
+    avg_order = df['amount_sar'].mean()
+    risk_exp = (len(df[(df['amount_sar'] >= 1000) & (df['customer_vat_id'] == "")])) * 500
+
+    # --- STEP 2: BRAIN UI ---
+    st.markdown(f"""<div class="brain-card">
+        <h3>📊 Current Intelligence Snapshot</h3>
+        • Top Category: <b>{top_cat}</b> ({rev_share:.1f}% Share)<br>
+        • Avg Order Value: <b>SAR {avg_order:.2f}</b><br>
+        • Total Revenue: <b>SAR {total_rev:,.2f}</b>
+        </div>""", unsafe_allow_html=True)
+
+    if st.button("✨ Generate AI Human Insights"):
+        with st.spinner("Mistral-Large parsing data patterns..."):
+            try:
+                client = Mistral(api_key=MISTRAL_API_KEY)
+                prompt = f"""You are a business analyst for SMEs in Saudi Arabia. 
+                Data: Top category {top_category}, {rev_share}% share, Total Rev {total_rev} SAR, Risk {risk_exp} SAR.
+                Generate 3 practical insights: 1. Performance, 2. Risk, 3. Recommendation. Tone: Human-like and decision-oriented."""
+                
+                # For demo purposes, if key is missing, show fallback
+                if MISTRAL_API_KEY == "YOUR_MISTRAL_API_KEY":
+                    st.info("Insight: Catering is dominating your weekend revenue. Action: Prepare 'Party Bundles' to increase average order value by 15%.")
+                else:
+                    chat_response = client.chat.complete(
+                        model="mistral-large-latest",
+                        messages=[{"role": "user", "content": prompt}]
+                    )
+                    st.write(chat_response.choices[0].message.content)
+            except Exception as e:
+                st.error("Connect your Mistral API Key to enable live AI generation.")
+
+    st.divider()
+    if st.button("🚀 Apply Pricing Recommendation"):
+        st.balloons()
+        st.success("Strategy Deployed: Inventory adjusted for high-performing Catering items.")
