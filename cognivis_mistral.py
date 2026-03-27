@@ -2,19 +2,21 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import time
+import re
+from datetime import datetime
 
 # --- 1. GLOBAL UI CONFIGURATION ---
 st.set_page_config(page_title="Cognivis OS", page_icon="🧠", layout="wide")
 
-# Custom CSS for SaaS UI Branding
+# Custom CSS for SaaS UI Branding & WhatsApp Simulation
 st.markdown("""
     <style>
     .stApp { background-color: #0e1117; color: #ffffff; }
     
     /* Shield Branding (Green) */
     .shield-card {
-        border: 2px solid #00FF00;
-        background-color: rgba(0, 255, 0, 0.05);
+        border: 1px solid #22c55e;
+        background-color: rgba(34, 197, 94, 0.05);
         padding: 20px;
         border-radius: 12px;
         margin-bottom: 15px;
@@ -22,58 +24,99 @@ st.markdown("""
     
     /* Brain Branding (Blue) */
     .brain-card {
-        border: 2px solid #00FFFF;
-        background-color: rgba(0, 255, 255, 0.05);
+        border: 1px solid #3b82f6;
+        background-color: rgba(59, 130, 246, 0.05);
         padding: 20px;
         border-radius: 12px;
         margin-bottom: 15px;
     }
     
-    .whatsapp-box {
-        background-color: #075e54;
-        border-left: 5px solid #25d366;
+    /* WhatsApp UI Simulation */
+    .wa-container {
+        background-color: #efeae2;
         padding: 15px;
-        border-radius: 10px;
-        font-family: 'Helvetica', sans-serif;
+        border-radius: 12px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        background-image: url("https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png");
+        background-size: cover;
     }
-    
-    .metric-container {
-        background-color: #1e2130;
-        padding: 15px;
-        border-radius: 10px;
-        border: 1px solid #30363d;
+    .wa-bubble {
+        background-color: #d9fdd3;
+        color: #111b21;
+        padding: 8px 12px;
+        border-radius: 8px;
+        margin-bottom: 8px;
+        max-width: 85%;
+        font-size: 14px;
+        box-shadow: 0 1px 0.5px rgba(11,20,26,.13);
+        position: relative;
+    }
+    .wa-time {
+        font-size: 10px;
+        color: #667781;
+        float: right;
+        margin-top: 4px;
+        margin-left: 8px;
+    }
+    .wa-user-bubble {
+        background-color: #ffffff;
+        color: #111b21;
+        padding: 8px 12px;
+        border-radius: 8px;
+        margin-bottom: 8px;
+        max-width: 85%;
+        font-size: 14px;
+        box-shadow: 0 1px 0.5px rgba(11,20,26,.13);
+        margin-left: auto;
     }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. SESSION STATE (Persistence Layer) ---
+# --- 2. SESSION STATE ---
 if 'raw_data' not in st.session_state:
     st.session_state.raw_data = None
-if 'resolved_invoices' not in st.session_state:
-    st.session_state.resolved_invoices = set()
+if 'fix_logs' not in st.session_state:
+    st.session_state.fix_logs = []
 if 'applied_recommendations' not in st.session_state:
     st.session_state.applied_recommendations = False
 
-# --- 3. DATA ENGINE (Ingestion & Cleaning) ---
+# --- 3. DATA ENGINE (Universal Cleaner) ---
 def titanium_cleaner(df):
-    """Standardizes any POS export into the Cognivis Schema."""
-    df.columns = [c.lower().replace(' ', '_').strip() for c in df.columns]
+    """Universally standardizes any POS export using Regex mapping."""
+    # 1. Clean column names
+    df.columns = [str(c).lower().strip() for c in df.columns]
     
-    mapping = {
-        'invoice': 'invoice_id', 'inv_id': 'invoice_id', 'bill_no': 'invoice_id',
-        'amount': 'amount_sar', 'total': 'amount_sar', 'price': 'amount_sar',
-        'vat': 'customer_vat_id', 'tax_id': 'customer_vat_id',
-        'category': 'category', 'item_group': 'category'
-    }
-    df = df.rename(columns=mapping)
+    # 2. Universal Regex Mappings
+    col_mapping = {}
+    for col in df.columns:
+        if re.search(r'invoice|inv|bill|receipt|order', col):
+            col_mapping[col] = 'invoice_id'
+        elif re.search(r'amount|total|price|sar|value', col):
+            col_mapping[col] = 'amount_sar'
+        elif re.search(r'vat|tax|tin|customer_vat', col):
+            col_mapping[col] = 'customer_vat_id'
+        elif re.search(r'category|group|type|department', col):
+            col_mapping[col] = 'category'
+            
+    df = df.rename(columns=col_mapping)
     
-    # Critical Fixes
+    # 3. Ensure required columns exist and clean data types
+    if 'invoice_id' not in df.columns:
+        df['invoice_id'] = [f"SYS-{i}" for i in range(len(df))]
+        
     if 'amount_sar' in df.columns:
+        # Strip currency symbols and convert to float
         df['amount_sar'] = pd.to_numeric(df['amount_sar'].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce').fillna(0)
+    else:
+        df['amount_sar'] = 0.0
+
     if 'customer_vat_id' in df.columns:
         df['customer_vat_id'] = df['customer_vat_id'].fillna('').astype(str).str.strip()
+        # Remove '.0' from pandas float conversion
+        df['customer_vat_id'] = df['customer_vat_id'].str.replace(r'\.0$', '', regex=True)
     else:
         df['customer_vat_id'] = ""
+        
     if 'category' not in df.columns:
         df['category'] = "General"
         
@@ -81,10 +124,10 @@ def titanium_cleaner(df):
 
 def get_mock_data():
     return pd.DataFrame({
-        "invoice_id": ["INV-8801", "INV-8802", "INV-8803", "INV-8804", "INV-8805"],
-        "category": ["Catering", "Retail", "Catering", "Retail", "Catering"],
-        "amount_sar": [1450.00, 85.00, 3200.00, 450.00, 950.00],
-        "customer_vat_id": ["", "123456789", "", "987654321", ""]
+        "Bill No": ["INV-8801", "INV-8802", "INV-8803", "INV-8804", "INV-8805"],
+        "Item Group": ["Catering", "Retail", "Catering", "Retail", "Catering"],
+        "Total (SAR)": ["1,450.00", "85.00", "3,200.00", "450.00", "950.00"],
+        "Tax Number": [np.nan, "312345678900003", "", "398765432100003", None]
     })
 
 # --- 4. NAVIGATION ---
@@ -93,128 +136,173 @@ with st.sidebar:
     st.caption("AI Shield + Brain for SME Growth")
     st.divider()
     
-    st.metric("System Confidence", "98.7%", "+0.2%")
-    st.write("🔄 **System Flow:**")
-    st.caption("POS → Cognivis Shield → ZATCA")
-    
-    menu = st.radio("Menu", ["📥 Data Hub", "🛡️ ZATCA Shield", "💡 AI Brain"])
+    menu = st.radio("Navigation", ["📥 Data Hub", "🛡️ ZATCA Shield", "💡 AI Brain"])
     st.divider()
-    st.info("Demo Mode Active")
-
-# Load Data logic
-if st.session_state.raw_data is None:
-    st.session_state.raw_data = get_mock_data()
+    
+    if st.session_state.raw_data is not None:
+        st.success("🟢 Data Synced")
+        if st.button("Clear Data / Reset"):
+            st.session_state.raw_data = None
+            st.session_state.fix_logs = []
+            st.rerun()
+    else:
+        st.warning("🔴 No Data Loaded")
 
 # --- 5. PAGE 1: DATA HUB ---
 if menu == "📥 Data Hub":
     st.title("📥 Data Ingestion Layer")
-    st.write("Universal schema detection for local POS exports.")
+    st.write("Upload any POS export. The **Titanium Cleaner** will automatically map your columns to the ZATCA Phase 2 schema.")
     
-    uploaded_file = st.file_uploader("Upload POS CSV", type=['csv'])
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        uploaded_file = st.file_uploader("Upload POS Data (CSV)", type=['csv'])
+    with col2:
+        st.write("<br><br>", unsafe_allow_html=True)
+        st.write("**Or test with sample data:**")
+        if st.button("Load Mock Data (Foodics Format)"):
+            st.session_state.raw_data = titanium_cleaner(get_mock_data())
+            st.session_state.fix_logs = []
+            st.rerun()
+
     if uploaded_file:
         raw = pd.read_csv(uploaded_file)
         st.session_state.raw_data = titanium_cleaner(raw)
-        st.success("✅ Data standardized successfully.")
+        st.session_state.fix_logs = []
+        st.success("✅ Data standardized successfully via Titanium Cleaner.")
     
-    st.subheader("Data Stream Preview")
-    st.dataframe(st.session_state.raw_data, use_container_width=True)
-    if not uploaded_file:
-        st.caption("⚠️ Displaying mock dataset for demonstration.")
+    if st.session_state.raw_data is not None:
+        st.subheader("Standardized Data Stream")
+        st.dataframe(st.session_state.raw_data, use_container_width=True)
 
 # --- 6. PAGE 2: ZATCA SHIELD ---
 elif menu == "🛡️ ZATCA Shield":
     st.title("🛡️ ZATCA Compliance Shield")
-    df = st.session_state.raw_data
     
-    # Compliance Logic
-    violations = df[(df['amount_sar'] >= 1000) & (df['customer_vat_id'] == "")]
-    active_violations = violations[~violations['invoice_id'].isin(st.session_state.resolved_invoices)]
-    
-    # Dashboard Metrics
-    m1, m2, m3 = st.columns(3)
-    with m1:
-        st.metric("Active Violations", len(active_violations))
-    with m2:
-        penalty = len(active_violations) * 500
-        st.metric("Potential Liability", f"SAR {penalty}")
-    with m3:
-        reduction = (len(st.session_state.resolved_invoices) / len(violations)) * 100 if len(violations) > 0 else 100
-        st.metric("Risk Reduction", f"{reduction:.0f}%")
-
-    st.divider()
-    
-    if not active_violations.empty:
-        for index, row in active_violations.iterrows():
-            with st.container():
-                st.markdown(f"""<div class="shield-card">
-                    <b>🚨 Violation Detected: {row['invoice_id']}</b><br>
-                    Issue: Amount (SAR {row['amount_sar']}) exceeds threshold for Simplified Invoices without Buyer VAT ID.
-                </div>""", unsafe_allow_html=True)
-                
-                col1, col2 = st.columns([1, 2])
-                with col1:
-                    if st.button(f"Fix Invoice {row['invoice_id']}", key=f"btn_{index}"):
-                        with st.spinner("Generating Credit Note..."):
-                            time.sleep(1)
-                            st.session_state.resolved_invoices.add(row['invoice_id'])
-                            st.rerun()
-                with col2:
-                    st.markdown(f"""<div class="whatsapp-box">
-                        <b>[Cognivis Shield]</b><br>
-                        Invoice #{row['invoice_id']} is non-compliant.<br>
-                        Risk: SAR 500 fine.<br>
-                        Reply 'FIX' to auto-resolve.
-                        </div>""", unsafe_allow_html=True)
+    if st.session_state.raw_data is None:
+        st.info("Please load data in the Data Hub first.")
     else:
-        st.success("🎉 All compliance risks resolved. Data is ready for ZATCA submission.")
+        df = st.session_state.raw_data
+        
+        # ZATCA Rule: B2C Invoices >= 1000 SAR require Buyer VAT or must be split
+        violations = df[(df['amount_sar'] >= 1000) & (df['customer_vat_id'] == "")]
+        
+        # Dashboard Metrics
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Total Invoices Scanned", len(df))
+        m2.metric("Compliance Violations", len(violations), delta=f"-{len(st.session_state.fix_logs)} Fixed" if st.session_state.fix_logs else None, delta_color="inverse")
+        m3.metric("Financial Risk Prevented", f"SAR {len(st.session_state.fix_logs) * 5000}")
+
+        st.divider()
+        
+        if not violations.empty:
+            st.subheader("🚨 Action Required")
+            for index, row in violations.iterrows():
+                with st.container():
+                    col1, col2 = st.columns([1.2, 1])
+                    
+                    with col1:
+                        st.markdown(f"""<div class="shield-card">
+                            <h4 style="margin:0; color:#22c55e;">Phase 2 Violation: {row['invoice_id']}</h4>
+                            <p style="margin-top:10px; font-size:14px;"><b>Rule:</b> Simplified Invoices (B2C) cannot exceed SAR 1,000 without a valid Buyer VAT ID.</p>
+                            <p style="font-size:14px;"><b>Current Value:</b> SAR {row['amount_sar']:,.2f}</p>
+                        </div>""", unsafe_allow_html=True)
+                        
+                        # Fix Action Button
+                        if st.button(f"Auto-Fix Invoice {row['invoice_id']}", key=f"btn_{index}"):
+                            with st.spinner("Applying ZATCA compliance fix..."):
+                                time.sleep(1)
+                                # THE FIX: Update the dataframe directly
+                                # In reality, you might split the invoice, here we assign a default B2C VAT to convert it to standard
+                                st.session_state.raw_data.at[index, 'customer_vat_id'] = "300000000000003"
+                                
+                                # Log the change
+                                log_msg = f"✅ Fixed {row['invoice_id']}: Converted to Standard Invoice by attaching generic B2C VAT ID."
+                                st.session_state.fix_logs.append(log_msg)
+                                st.rerun()
+                                
+                    with col2:
+                        # WhatsApp UI Simulation
+                        st.markdown(f"""
+                        <div class="wa-container">
+                            <div class="wa-bubble">
+                                🛡️ <b>Cognivis Shield Alert</b><br>
+                                Invoice <b>{row['invoice_id']}</b> exceeds SAR 1,000 without a Buyer VAT number.<br><br>
+                                <i>Risk: SAR 5,000 ZATCA Fine.</i><br>
+                                Reply <b>1</b> to auto-split invoice.<br>
+                                Reply <b>2</b> to convert to Standard B2B.
+                                <div class="wa-time">{datetime.now().strftime("%H:%M")}</div>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+        else:
+            st.success("🎉 All ZATCA compliance risks resolved. Data is ready for Phase 2 clearance.")
+            
+        # Display Logs & Export
+        if st.session_state.fix_logs:
+            st.subheader("📝 Resolution Logs")
+            for log in st.session_state.fix_logs:
+                st.write(log)
+            
+            # Convert DF to CSV for download
+            csv = df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Download ZATCA-Ready CSV",
+                data=csv,
+                file_name='cognivis_cleansed_data.csv',
+                mime='text/csv',
+                type="primary"
+            )
 
 # --- 7. PAGE 3: AI BRAIN ---
 elif menu == "💡 AI Brain":
     st.title("💡 AI Intelligence Brain")
-    df = st.session_state.raw_data
     
-    # Data Aggregation
-    total_rev = df['amount_sar'].sum()
-    top_cat = df.groupby('category')['amount_sar'].sum().idxmax()
-    top_val = df.groupby('category')['amount_sar'].sum().max()
-    share = (top_val / total_rev) * 100
-    avg_order = df['amount_sar'].mean()
-    risk_exp = (len(df[(df['amount_sar'] >= 1000) & (df['customer_vat_id'] == "")])) * 500
+    if st.session_state.raw_data is None:
+        st.info("Please load data in the Data Hub first.")
+    else:
+        df = st.session_state.raw_data
+        
+        # Data Aggregation
+        total_rev = df['amount_sar'].sum()
+        if not df.empty:
+            top_cat = df.groupby('category')['amount_sar'].sum().idxmax()
+            top_val = df.groupby('category')['amount_sar'].sum().max()
+            share = (top_val / total_rev) * 100 if total_rev > 0 else 0
+            avg_order = df['amount_sar'].mean()
+        else:
+            top_cat, top_val, share, avg_order = "N/A", 0, 0, 0
 
-    # Structured context for Brain Card
-    st.markdown(f"""<div class="brain-card">
-        <h3>📊 Intelligence Snapshot</h3>
-        • Top Revenue Driver: <b>{top_cat}</b><br>
-        • Category Share: <b>{share:.1f}%</b><br>
-        • Avg. Ticket Size: <b>SAR {avg_order:.2f}</b><br>
-        • Current Risk Exposure: <b>SAR {risk_exp}</b>
+        # Structured context for Brain Card
+        st.markdown(f"""<div class="brain-card">
+            <h3 style="color:#3b82f6; margin-top:0;">📊 Intelligence Snapshot</h3>
+            <div style="display:flex; justify-content:space-between; margin-top:15px;">
+                <div><b>Top Revenue Driver:</b><br>{top_cat}</div>
+                <div><b>Category Reliance:</b><br>{share:.1f}%</div>
+                <div><b>Avg. Ticket Size:</b><br>SAR {avg_order:.2f}</div>
+            </div>
         </div>""", unsafe_allow_html=True)
 
-    st.subheader("🧠 Human-Like Insights (Mistral Powered)")
-    
-    # Mock AI insights for production feel
-    with st.expander("✨ View Latest Analysis", expanded=True):
-        st.write(f"**📊 Performance:** Your {top_cat} category is currently carrying {share:.0f}% of your volume. This indicates a high concentration of corporate-style demand.")
-        st.write(f"**⚠️ Risk:** You have SAR {risk_exp} in audit risk due to missing buyer details on high-value tickets.")
-        st.write(f"**🚀 Recommendation:** Increase stock for {top_cat} supplies by 15% before the weekend peak.")
+        st.subheader("🧠 Proactive Insights")
         
+        # WhatsApp UI Simulation for AI Insights
+        st.markdown(f"""
+        <div class="wa-container" style="max-width: 600px;">
+            <div class="wa-bubble">
+                💡 <b>Cognivis Brain</b><br>
+                I've analyzed today's POS logs. <b>{top_cat}</b> is driving {share:.0f}% of your revenue, pushing your average ticket size to SAR {avg_order:.0f}.<br><br>
+                <b>Action:</b> I recommend bundling underperforming Retail items with {top_cat} orders tomorrow to increase margin by estimated 12%.<br><br>
+                Reply <b>APPLY</b> to push this combo to your POS.
+                <div class="wa-time">{datetime.now().strftime("%H:%M")}</div>
+            </div>
+            {'<div class="wa-user-bubble">APPLY<div class="wa-time">' + datetime.now().strftime("%H:%M") + '</div></div>' if st.session_state.applied_recommendations else ''}
+            {'<div class="wa-bubble">✅ Done. "Combo Deal" synced to POS API.<div class="wa-time">' + datetime.now().strftime("%H:%M") + '</div></div>' if st.session_state.applied_recommendations else ''}
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.write("<br>", unsafe_allow_html=True)
         if not st.session_state.applied_recommendations:
-            if st.button("Apply Recommendation"):
-                with st.spinner("Updating inventory & pricing..."):
-                    time.sleep(1.5)
+            if st.button("Simulate 'APPLY' Reply"):
+                with st.spinner("Syncing to POS..."):
+                    time.sleep(1)
                     st.session_state.applied_recommendations = True
                     st.rerun()
-        else:
-            st.success("✅ Recommendation applied to POS system.")
-
-    # Forensic Audit Feature
-    st.divider()
-    st.subheader("🕵️ Forensic Audit: Sequence Gaps")
-    df['num'] = pd.to_numeric(df['invoice_id'].str.extract('(\d+)', expand=False), errors='coerce')
-    if not df['num'].isna().all():
-        full_range = set(range(int(df['num'].min()), int(df['num'].max()) + 1))
-        missing = full_range - set(df['num'].dropna().unique())
-        if missing:
-            st.error(f"🚨 Sequence Gaps Found: {len(missing)} missing invoices detected.")
-        else:
-            st.success("✅ Sequential Integrity Verified (100%).")
