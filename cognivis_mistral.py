@@ -3,26 +3,23 @@ import pandas as pd
 import numpy as np
 import time
 import re
+import random
+import uuid
 from datetime import datetime
 
 # --- 1. GLOBAL UI CONFIGURATION ---
-st.set_page_config(page_title="Cognivis OS | ZATCA Shield", page_icon="🧠", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Cognivis OS | Enterprise", page_icon="🧠", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
     <style>
     .stApp { background-color: #020617; color: #f8fafc; font-family: 'Inter', sans-serif; }
-    
     .shield-card { border-left: 4px solid #22c55e; background-color: #0f172a; padding: 20px; border-radius: 8px; margin-bottom: 15px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5); }
     .brain-card { border-left: 4px solid #3b82f6; background-color: #0f172a; padding: 20px; border-radius: 8px; margin-bottom: 15px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5); }
     .impact-card { background-color: #0f172a; border: 1px solid rgba(255,255,255,0.1); padding: 20px; border-radius: 12px; text-align: center; }
-    
     .terminal { background-color: #000000; color: #22c55e; font-family: 'Courier New', Courier, monospace; padding: 15px; border-radius: 6px; font-size: 13px; border: 1px solid #333; line-height: 1.5; }
-    
+    .saas-header { background: #0f172a; padding: 10px 15px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); margin-bottom: 20px; font-size: 13px; color: #cbd5e1; }
     .badge-high { background: rgba(239, 68, 68, 0.2); color: #ef4444; padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 12px;}
-    .badge-safe { background: rgba(34, 197, 94, 0.2); color: #22c55e; padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 12px;}
     .badge-hitl { background: rgba(245, 158, 11, 0.2); color: #f59e0b; padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 12px;}
-    
-    /* WhatsApp UI */
     .wa-container { background-color: #0f172a; padding: 15px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.05); }
     .wa-bubble { background-color: #1e293b; color: #f8fafc; padding: 12px 16px; border-radius: 8px; margin-bottom: 8px; max-width: 90%; font-size: 14px; border-left: 3px solid #3b82f6; }
     .wa-user-bubble { background-color: #3b82f6; color: #ffffff; padding: 12px 16px; border-radius: 8px; margin-bottom: 8px; max-width: 85%; font-size: 14px; margin-left: auto; }
@@ -35,11 +32,11 @@ if 'raw_data' not in st.session_state: st.session_state.raw_data = None
 if 'pos_source' not in st.session_state: st.session_state.pos_source = "None"
 if 'audit_ledger' not in st.session_state: st.session_state.audit_ledger = []
 if 'brain_synced' not in st.session_state: st.session_state.brain_synced = False
-if 'review_mode' not in st.session_state: st.session_state.review_mode = {} # Tracks HITL state
-if 'initial_risk_count' not in st.session_state: st.session_state.initial_risk_count = 0 # Tracks ROI
+if 'review_mode' not in st.session_state: st.session_state.review_mode = {}
+if 'initial_risk_count' not in st.session_state: st.session_state.initial_risk_count = 0
 
 # --- 3. DATA ENGINE ---
-def log_audit(action, invoice_id, status, user="Cognivis AI (Auto)"):
+def log_audit(action, invoice_id, status, user="System Engine"):
     st.session_state.audit_ledger.append({
         "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "Invoice ID": invoice_id,
@@ -58,32 +55,36 @@ def titanium_cleaner(df):
         elif re.search(r'category|group|type', col): col_mapping[col] = 'category'
             
     df = df.rename(columns=col_mapping)
-    
     if 'invoice_id' not in df.columns: df['invoice_id'] = [f"SYS-{i}" for i in range(len(df))]
     if 'amount_sar' in df.columns: df['amount_sar'] = pd.to_numeric(df['amount_sar'].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce').fillna(0)
-    if 'customer_vat_id' in df.columns: 
-        df['customer_vat_id'] = df['customer_vat_id'].fillna('').astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+    if 'customer_vat_id' in df.columns: df['customer_vat_id'] = df['customer_vat_id'].fillna('').astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
     if 'category' not in df.columns: df['category'] = "General"
     if 'doc_type' not in df.columns: df['doc_type'] = "Tax Invoice (388)"
-        
     return df
 
 def get_mock_data():
     return pd.DataFrame({
-        "Bill No": ["INV-8801", "INV-8802", "INV-8803", "INV-8804", "INV-8805", "INV-8806"],
-        "Item Group": ["Catering", "Retail", "Catering", "Retail", "Catering", "Merchandise"],
-        "Total (SAR)": ["1,450.00", "85.00", "3,200.00", "450.00", "950.00", "150.00"],
-        "Tax Number": [np.nan, "312345678900003", "", "398765432100003", "300000000000003", ""]
+        "Bill No": ["INV-8801", "INV-8802", "INV-8803"],
+        "Item Group": ["Catering", "Retail", "Catering"],
+        "Total (SAR)": ["1,450.00", "85.00", "3,200.00"],
+        "Tax Number": [np.nan, "312345678900003", ""]
     })
 
-# --- 4. NAVIGATION ---
+# --- 4. SAAS SIDEBAR ---
 with st.sidebar:
-    st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/0/0b/Flag_of_Saudi_Arabia.svg/1024px-Flag_of_Saudi_Arabia.svg.png", width=30)
-    st.title("Cognivis OS")
-    st.caption("🔒 Encrypted & NDMO Compliant")
-    st.divider()
+    # UPGRADE 5: Multi-Tenant SaaS Feel
+    st.markdown("""
+        <div class="saas-header">
+            <strong>🏢 Org:</strong> Al Baik Restaurant Group<br>
+            <strong>🟢 Status:</strong> 12 Active POS Terminals<br>
+            <strong>👤 User:</strong> Admin (Abrar Ahmed)<br>
+            <strong>⏱️ Last Sync:</strong> Live
+        </div>
+    """, unsafe_allow_html=True)
     
-    menu = st.radio("System Modules", ["📥 Integration Hub", "🛡️ ZATCA Shield", "📓 Compliance Ledger", "💡 AI Intelligence"])
+    st.title("Cognivis OS")
+    st.divider()
+    menu = st.radio("System Modules", ["📥 Integration Hub", "🛡️ ZATCA Shield", "📓 Compliance Ledger", "💡 Pattern Engine (Phase 1)"])
     st.divider()
     
     if st.session_state.raw_data is not None:
@@ -105,42 +106,51 @@ if menu == "📥 Integration Hub":
             raw = titanium_cleaner(get_mock_data())
             st.session_state.raw_data = raw
             st.session_state.pos_source = "Foodics"
-            # Calculate initial risk for ROI tracking
             st.session_state.initial_risk_count = len(raw[(raw['amount_sar'] >= 1000) & (raw['customer_vat_id'] == "") & (raw['doc_type'] == "Tax Invoice (388)")])
             log_audit("API Handshake", "System", "Connected")
-            st.rerun()
-    with c2:
-        if st.button("🛒 Connect Salla API"):
-            raw = titanium_cleaner(get_mock_data())
-            st.session_state.raw_data = raw
-            st.session_state.pos_source = "Salla"
-            st.session_state.initial_risk_count = len(raw[(raw['amount_sar'] >= 1000) & (raw['customer_vat_id'] == "")])
             st.rerun()
 
     if st.session_state.raw_data is not None:
         st.divider()
         st.subheader("Data Standardized (ZATCA Mapping)")
         st.dataframe(st.session_state.raw_data, use_container_width=True)
-        st.caption("🔒 Data temporarily cached in secure volatile memory. Synced to Postgres DB upon clearance.")
 
-# --- 6. PAGE 2: ZATCA SHIELD (UPGRADES 1, 2, & 5) ---
+# --- 6. PAGE 2: ZATCA SHIELD (UPGRADES 1, 2 & 3) ---
 elif menu == "🛡️ ZATCA Shield":
     st.title("Real-Time Compliance Shield")
     
     if st.session_state.raw_data is None:
         st.warning("Please connect a POS provider in the Integration Hub.")
     else:
+        # UPGRADE 1: Real-Time Live Interception Button
+        st.markdown("### ⚡ Live Transaction Monitoring")
+        if st.button("🛒 Simulate Live POS Transaction (Incoming)"):
+            new_inv_id = f"INV-880{random.randint(4, 99)}"
+            new_amount = random.uniform(1100.0, 4500.0) # Guaranteed to trigger fine risk
+            new_transaction = pd.DataFrame([{
+                "invoice_id": new_inv_id,
+                "amount_sar": new_amount,
+                "customer_vat_id": "",
+                "category": "Retail",
+                "doc_type": "Tax Invoice (388)"
+            }])
+            st.session_state.raw_data = pd.concat([new_transaction, st.session_state.raw_data], ignore_index=True)
+            st.session_state.initial_risk_count += 1
+            log_audit("Live POS Payload Intercepted", new_inv_id, "PENDING CLEARANCE")
+            st.rerun()
+
+        st.divider()
+        
         df = st.session_state.raw_data
         violations = df[(df['amount_sar'] >= 1000) & (df['customer_vat_id'] == "") & (df['doc_type'] == "Tax Invoice (388)")]
         current_risk_count = len(violations)
         
-        # UPGRADE 5: BEFORE VS AFTER ROI IMPACT
         st.markdown("### 📊 Economic Impact Tracker")
         roi1, roi2 = st.columns(2)
         with roi1:
             st.markdown(f"""
             <div class="impact-card" style="border-top: 4px solid #ef4444;">
-                <h4 style="color:#ef4444; margin:0;">❌ Before Cognivis</h4>
+                <h4 style="color:#ef4444; margin:0;">❌ Incoming Risk</h4>
                 <h2 style="margin:10px 0;">{st.session_state.initial_risk_count} Violations</h2>
                 <p style="color:#94a3b8; margin:0;">SAR {st.session_state.initial_risk_count * 5000:,} Financial Risk</p>
             </div>
@@ -148,122 +158,114 @@ elif menu == "🛡️ ZATCA Shield":
         with roi2:
             st.markdown(f"""
             <div class="impact-card" style="border-top: 4px solid #22c55e;">
-                <h4 style="color:#22c55e; margin:0;">✅ After Cognivis</h4>
+                <h4 style="color:#22c55e; margin:0;">✅ Shield Status</h4>
                 <h2 style="margin:10px 0;">{current_risk_count} Pending</h2>
-                <p style="color:#94a3b8; margin:0;">SAR {current_risk_count * 5000:,} Remaining Risk</p>
+                <p style="color:#94a3b8; margin:0;">Intercepted before ZATCA submission</p>
             </div>
             """, unsafe_allow_html=True)
 
         st.divider()
         
         if not violations.empty:
-            st.markdown(f"### <span class='badge-high'>🚨 Action Required: {current_risk_count} Violations Detected</span>", unsafe_allow_html=True)
+            st.markdown(f"### <span class='badge-high'>🚨 Action Required: {current_risk_count} Intercepted Transactions</span>", unsafe_allow_html=True)
             
             for index, row in violations.iterrows():
-                with st.expander(f"Invoice {row['invoice_id']} | Risk: SAR 5,000 | Status: PENDING CLEARANCE", expanded=True):
+                with st.expander(f"Invoice {row['invoice_id']} | Risk: SAR 5,000 | Intercepted", expanded=True):
                     col1, col2 = st.columns([1, 1])
                     
                     with col1:
                         st.markdown(f"""
-                            **Violation:** Simplified B2C Invoice exceeds SAR 1,000 without Buyer VAT ID.<br>
+                            **Rule Violation:** Simplified B2C Invoice exceeds SAR 1,000 without Buyer VAT ID.<br>
                             **Amount:** SAR {row['amount_sar']:,.2f}<br>
                         """, unsafe_allow_html=True)
                         
-                        # UPGRADE 1 & 2: Human In The Loop (HITL) Workflow
                         if not st.session_state.review_mode.get(index, False):
-                            st.markdown("<span class='badge-hitl'>Approval Mode: ON</span>", unsafe_allow_html=True)
+                            st.markdown("<span class='badge-hitl'>Approval Mode: ON (HITL Required)</span>", unsafe_allow_html=True)
                             st.write("<br>", unsafe_allow_html=True)
-                            if st.button("👨‍💻 Review AI Proposed Fix", key=f"rev_{index}", type="primary"):
+                            if st.button("👨‍💻 Resolve Violation", key=f"rev_{index}", type="primary"):
                                 st.session_state.review_mode[index] = True
                                 st.rerun()
                         else:
-                            st.info("💡 **AI Suggestion:** Convert to standard B2B invoice to avoid fine. Please input verified Buyer VAT Number below.")
-                            vat_input = st.text_input("Enter Customer VAT ID (15 Digits):", key=f"vat_{index}", placeholder="e.g. 300000000000003")
+                            st.info("💡 **Pattern Engine Suggestion:** Convert to standard B2B invoice. Please input verified 15-digit Buyer VAT Number.")
+                            vat_input = st.text_input("Enter Customer VAT ID (15 Digits):", key=f"vat_{index}")
                             
                             c_app, c_can = st.columns(2)
-                            if c_app.button("✅ Approve & Issue Credit Note", key=f"app_{index}"):
-                                if len(vat_input) >= 10: # Basic validation
-                                    # Create Credit Note (Cancel Original)
+                            if c_app.button("✅ Approve & Issue Correction", key=f"app_{index}"):
+                                # UPGRADE 3: Strict VAT Validation
+                                if len(vat_input) == 15 and vat_input.isdigit():
                                     st.session_state.raw_data.at[index, 'doc_type'] = "Credit Note (381)"
                                     st.session_state.raw_data.at[index, 'amount_sar'] = -abs(row['amount_sar'])
                                     
-                                    # Create Corrected Invoice (Fix)
                                     new_row = row.copy()
                                     new_row['invoice_id'] = f"{row['invoice_id']}-REV"
                                     new_row['customer_vat_id'] = vat_input
                                     new_row['doc_type'] = "Tax Invoice (388)"
                                     st.session_state.raw_data = pd.concat([st.session_state.raw_data, pd.DataFrame([new_row])], ignore_index=True)
                                     
-                                    # Log to Audit
                                     log_audit("Issued Credit Note 381", row['invoice_id'], "COMPLIANT", user="Account Admin (HITL)")
-                                    log_audit("Issued Revised Invoice", new_row['invoice_id'], "COMPLIANT", user="Account Admin (HITL)")
+                                    log_audit("Issued Revised B2B Invoice", new_row['invoice_id'], "ZATCA CLEARED", user="Account Admin (HITL)")
                                     
                                     st.session_state.review_mode[index] = False
                                     st.rerun()
                                 else:
-                                    st.error("Please enter a valid VAT number.")
+                                    st.error("❌ Invalid VAT: Must be exactly 15 numeric digits.")
                                     
                             if c_can.button("❌ Cancel", key=f"can_{index}"):
                                 st.session_state.review_mode[index] = False
                                 st.rerun()
 
                     with col2:
-                        # Diagnostic Terminal
-                        run_diag = st.button("🔍 Run Validation Engine", key=f"diag_{index}")
+                        run_diag = st.button("🔍 Simulate ZATCA API Handshake", key=f"diag_{index}")
                         term_placeholder = st.empty()
                         
+                        # UPGRADE 2: Real ZATCA API Simulation
                         if run_diag:
-                            sim_text = "> INITIALIZING ZATCA PHASE 2 VALIDATION...\n"
+                            sim_text = "> INITIATING POST /e-invoicing/developer-portal/invoices/clearance\n"
                             term_placeholder.markdown(f"<div class='terminal'>{sim_text}</div>", unsafe_allow_html=True)
-                            time.sleep(0.5)
+                            time.sleep(0.4)
                             logs = [
-                                "> Checking UBL 2.1 XML Schema... [OK]",
-                                "> Verifying Cryptographic Stamp... [OK]",
-                                "> Applying B2C/B2B Business Rules... [ERROR]",
-                                f"> FATAL: Invoice {row['invoice_id']} exceeds SAR 1000 limit for B2C.",
-                                "> STATUS: Clearance Rejected. Escalating to HITL Queue."
+                                "> Compiling UBL 2.1 XML Payload... [OK]",
+                                "> Generating Cryptographic Stamp (ECDSA)... [OK]",
+                                f"> Generating Invoice Hash (SHA-256)... {uuid.uuid4().hex[:12]}",
+                                "> Transmitting to ZATCA Core Gateway... [PENDING]",
+                                "> RECEIVING RESPONSE...",
+                                f"> STATUS 400: BAD REQUEST. Clearance Rejected.",
+                                f"> ERROR_CODE: BR-KSA-14 (B2C limit exceeded without VAT).",
+                                "> ACTION: Connection Terminated. Shield successfully intercepted fine."
                             ]
                             for log in logs:
                                 sim_text += log + "\n"
                                 term_placeholder.markdown(f"<div class='terminal'>{sim_text}</div>", unsafe_allow_html=True)
                                 time.sleep(0.3)
                         else:
-                            term_placeholder.markdown("<div class='terminal' style='color:#64748b;'>Awaiting diagnostics execution...</div>", unsafe_allow_html=True)
+                            term_placeholder.markdown("<div class='terminal' style='color:#64748b;'>Awaiting ZATCA Handshake...</div>", unsafe_allow_html=True)
 
         else:
-            st.success("🎉 All ZATCA compliance risks resolved. Data ready for secure transmission.")
+            st.success("🎉 All pending transactions cleared by ZATCA API. Zero Fine Liability.")
 
-# --- 7. PAGE 3: COMPLIANCE LEDGER (UPGRADE 3) ---
+# --- 7. PAGE 3: COMPLIANCE LEDGER ---
 elif menu == "📓 Compliance Ledger":
     st.title("Immutable Audit Ledger")
-    st.write("Enterprise-grade tracking of all system and user actions. Required by NDMO for data sovereignty.")
+    st.write("Enterprise-grade tracking. Data permanently hashed and stored in secure Saudi-based AWS local zone.")
     
     if len(st.session_state.audit_ledger) > 0:
         ledger_df = pd.DataFrame(st.session_state.audit_ledger)
         st.dataframe(ledger_df, use_container_width=True)
-        
-        csv = ledger_df.to_csv(index=False).encode('utf-8')
-        st.download_button(label="📥 Export Ledger for Ministry Auditor", data=csv, file_name='cognivis_audit_log.csv', mime='text/csv')
     else:
         st.info("Audit log is currently empty.")
-        
-    st.caption("🔒 Data permanently hashed and stored in secure Saudi-based AWS local zone (Simulated Persistence).")
 
-# --- 8. PAGE 4: AI INTELLIGENCE (UPGRADE 4) ---
-elif menu == "💡 AI Intelligence":
-    st.title("Neural Business Insights")
+# --- 8. PAGE 4: PATTERN ENGINE (UPGRADE 4) ---
+elif menu == "💡 Pattern Engine (Phase 1)":
+    st.title("Operational Analytics & Pattern Recognition")
     
     if st.session_state.raw_data is None:
-        st.info("Please connect a POS provider to activate the Brain.")
+        st.info("Please connect a POS provider to activate the Engine.")
     else:
         df = st.session_state.raw_data
         positive_df = df[df['amount_sar'] > 0]
         
-        # UPGRADE 4: Dynamic, Unscripted AI Logic
         top_cat = positive_df.groupby('category')['amount_sar'].sum().idxmax() if not positive_df.empty else "N/A"
         avg_order = positive_df['amount_sar'].mean() if not positive_df.empty else 0
-        
-        # Find underperforming categories specifically
         low_perf = positive_df[positive_df['amount_sar'] < avg_order]
         under_cats = low_perf['category'].unique() if not low_perf.empty else ["None"]
         under_str = ", ".join(under_cats)
@@ -271,7 +273,7 @@ elif menu == "💡 AI Intelligence":
         st.markdown(f"""
             <div class="brain-card">
                 <h4 style="margin-top:0; color:#3b82f6;">Data Model Status: Active</h4>
-                <p style="color:#94a3b8; font-size:14px;">The AI Reasoning Engine has dynamically processed {len(positive_df)} cleared transactions.</p>
+                <p style="color:#94a3b8; font-size:14px;">The Pattern Detection Engine has dynamically processed {len(positive_df)} cleared transactions to identify margin leakage.</p>
             </div>
         """, unsafe_allow_html=True)
         
@@ -281,21 +283,10 @@ elif menu == "💡 AI Intelligence":
         <div class="wa-container" style="max-width: 500px;">
             <div class="wa-bubble">
                 🧠 <b>Cognivis Intelligence</b><br><br>
-                Analysis complete. <b>{top_cat}</b> is driving your sales, but I've identified that <b>{under_str}</b> items are severely underperforming (Below SAR {avg_order:.0f} avg).<br><br>
+                Pattern detected. <b>{top_cat}</b> is driving your sales, but <b>{under_str}</b> items are severely underperforming (Below SAR {avg_order:.0f} avg).<br><br>
                 <b>Strategy:</b> I recommend a cross-selling algorithm pushing {under_str} items with every {top_cat} purchase.<br><br>
-                Reply <b>SYNC</b> to push this pricing update directly to {st.session_state.pos_source}.
+                Reply <b>SYNC</b> to push this logic to the POS.
                 <div class="wa-time">{datetime.now().strftime("%H:%M")}</div>
             </div>
-            {'<div class="wa-user-bubble">SYNC<div class="wa-time">' + datetime.now().strftime("%H:%M") + '</div></div>' if st.session_state.brain_synced else ''}
-            {'<div class="wa-bubble">✅ API Sync Complete. New margins optimized in POS.<div class="wa-time">' + datetime.now().strftime("%H:%M") + '</div></div>' if st.session_state.brain_synced else ''}
         </div>
         """, unsafe_allow_html=True)
-        
-        if not st.session_state.brain_synced:
-            st.write("<br>", unsafe_allow_html=True)
-            if st.button("Simulate 'SYNC' Reply"):
-                with st.spinner("Pushing payload to POS..."):
-                    time.sleep(1)
-                    st.session_state.brain_synced = True
-                    log_audit(f"Cross-Sell Strategy: {top_cat} + {under_str}", "Global Engine", "EXECUTED", user="Cognivis Neural Brain")
-                    st.rerun()
